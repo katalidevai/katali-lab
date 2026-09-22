@@ -40,6 +40,21 @@ Out of scope for this roadmap: GPU backends, CUDA/ROCm, EQS as a user-facing mod
 - Benchmark sustained generation, not only one-token or warm-cache results.
 - Keep model-specific optimizations behind shape/configuration checks rather than assuming that a larger sibling behaves like the 35B model.
 
+## Planned automatic CUDA support
+
+Katali-lab is CPU-first today, but the planned GPU mode will use the same elastic model rather than requiring the whole model to fit in VRAM.
+
+At startup, the executable will detect whether an NVIDIA CUDA device and usable CUDA runtime are available:
+
+```text
+CUDA available:  SSD -> system RAM expert cache -> GPU VRAM -> CUDA compute
+CUDA unavailable: SSD -> system RAM expert cache -> CPU compute
+```
+
+The application will remain one executable. With CUDA available, active experts and compute state will move to VRAM while cold experts remain in the system-RAM cache or on SSD. Without CUDA—or if CUDA initialization fails—the engine will automatically fall back to the existing CPU path and report the reason.
+
+The planned CUDA backend will add GPU kernels for quantized matrix-vector operations, routed MoE experts, Gated DeltaNet, full attention, and state transfers. The CPU/SSD path remains the correctness reference and fallback. CUDA support is intentionally limited to NVIDIA hardware; Vulkan, ROCm, and other GPU backends are out of scope for this plan.
+
 ## Local builds
 
 The repository build produces:
