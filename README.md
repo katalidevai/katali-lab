@@ -13,22 +13,22 @@ This project intentionally targets CPU execution. GPU, CUDA, ROCm, and GPU-offlo
 
 The official model cards are the source of truth for model configuration and licensing. GGUF repositories are community conversions; verify quantization, shard completeness, and tokenizer files before use.
 
-## Parked flagship
+## Validated flagship
 
 | Model | Status | Why it is next | CPU reality |
 |---|---|---|---|
-| Qwen3.5-397B-A17B | Parked, next integration | Same `qwen3_5_moe` family and the natural scale-up from 122B | Expect roughly 200+ GB for a solid 4-bit build, very high RAM demand, and slower CPU decode |
+| Qwen3.5-397B-A17B | Validated CPU smoke test | Same `qwen3_5_moe` family; loaded and generated successfully through Katali-lab | 231.21 GiB Q4_K_M; measured about 0.11 tok/s decode |
 
 Links: [official model](https://huggingface.co/Qwen/Qwen3.5-397B-A17B), [GGUF search](https://huggingface.co/models?apps=llama.cpp&other=base_model%3Aquantized%3AQwen%2FQwen3.5-397B-A17B).
 
-Before downloading 397B, inspect its configuration and GGUF metadata. Confirm hidden size, layer count, expert count, active top-k, tensor naming, shard layout, and MTP/NextN metadata against the existing loader. Do not begin with a full download until the CPU memory and storage budget is accepted.
+The 397B smoke test confirmed hidden size 4096, 61 layers, 512 experts, 10 routed experts plus 1 shared expert, and seven-shard GGUF loading. It is compatible, but not yet performance-practical on CPU.
 
 ## Future model roadmap
 
-1. **Qwen3.5-397B-A17B** — primary next target. Extend the existing Qwen3.5 MoE path only where inspection proves a real shape or metadata difference.
-2. **Qwen3.5 quantization variants** — evaluate Q3/Q4/Q5 GGUF variants for CPU RAM and SSD tradeoffs; preserve accuracy before chasing speed.
-3. **Smaller Qwen3.5 text models** — useful regression and low-RAM test targets if an official or reliable GGUF is available, but not the main flagship path.
-4. **Other architectures** — explicitly deferred. They require a separate loader/forward path and are not part of the current `qwen35moe` CPU scope.
+1. **Qwen3.8-Flash-Next** — next parked flagship and new architecture target.
+2. **Qwen3.5 quantization variants** — evaluate Q3/Q4/Q5 GGUF variants for CPU RAM and SSD tradeoffs.
+3. **Smaller Qwen3.5 text models** — useful regression and low-RAM test targets.
+4. **Other architectures** — explicitly deferred until the Qwen3.8 backend is understood.
 
 Out of scope for this roadmap: GPU backends, CUDA/ROCm, EQS as a user-facing model format, and changing trained MoE top-k to create a misleading “small mode.”
 
