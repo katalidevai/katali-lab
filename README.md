@@ -99,6 +99,27 @@ For CPU-only operation, use memory mapping and the model-specific profiles in `d
 
 The current published executables were tested locally after the final rebuild. `katali-lab.exe selftest` passed, 35B generation completed coherently at 2.25 tok/s for one decode token, and the 122B bounded smoke test completed at 1.04 tok/s for one decode token. These are CPU measurements on the development desktop, not guaranteed performance on other machines.
 
+## Next architecture target: Qwen3.8-Flash-Next
+
+After the Qwen3.5-397B smoke test, the next planned model family is **Qwen3.8-Flash-Next**. It is not a drop-in Qwen3.5 model: current GGUF metadata identifies it as `qwen4exp`, with a newer sparse-expert design and a large n-gram embedding table. It therefore needs a separate architecture backend while reusing Katali-lab's general elastic storage ideas.
+
+Official model: [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next). CPU-oriented GGUF reference: [Unsloth Qwen3.8-Flash-Next GGUF](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF).
+
+Approximate GGUF storage options:
+
+| Quantization | Approximate size |
+|---|---:|
+| IQ3_M | 93 GiB |
+| Q4_K_S | 105 GiB |
+| Q4_K_M | 111 GiB / 120 GB |
+| Q4_K_L | 130 GiB / 139 GB |
+| Q5_K_M | 125 GiB / 135 GB |
+| Q6_K | 157 GiB / 168 GB |
+| Q8_0 | 175 GiB / 188 GB |
+| BF16 | 330 GiB / 354 GB |
+
+An optional MTP sidecar is approximately 2.6 GB. The first Qwen3.8 milestone is compatibility only: inspect the GGUF, load it, and complete one short CPU smoke generation. Optimization comes later.
+
 ## References
 
 - [katali2 reference notes](docs/FUTURE.md)
