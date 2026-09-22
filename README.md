@@ -49,6 +49,41 @@ The repository build produces:
 
 The published GitHub repository intentionally contains only these two executable builds. Source, models, logs, and benchmark artifacts remain local.
 
+## How to use `katali-lab.exe`
+
+Open Command Prompt or PowerShell in the folder containing the executable.
+
+Check the build and run the built-in quantization test:
+
+```bat
+katali-lab.exe info
+katali-lab.exe selftest
+```
+
+Inspect a model before generating:
+
+```bat
+katali-lab.exe inspect C:\models\Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf
+```
+
+Generate with the 35B model:
+
+```bat
+katali-lab.exe generate C:\models\Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf "What is the capital of the Philippines? Reply with only the city name." --max 8 --pin 25 --cache-gb 8
+```
+
+Generate with the multi-shard 122B model by passing its split directory:
+
+```bat
+katali-lab.exe generate C:\models\Qwen_Qwen3.5-122B-A10B-Q4_K_M\Qwen_Qwen3.5-122B-A10B-Q4_K_M "Explain why the sky appears blue in one short sentence." --max 8 --pin 25 --cache-gb 12
+```
+
+For CPU-only operation, use memory mapping and the model-specific profiles in `docs/35B_OPTIMIZE.md` and `docs/122B_OPTIMIZE.md`. `--max` limits generated tokens, `--pin` controls the pinned-cache percentage, and `--cache-gb` sets the expert-cache budget.
+
+## Build verification
+
+The current published executables were tested locally after the final rebuild. `katali-lab.exe selftest` passed, 35B generation completed coherently at 2.25 tok/s for one decode token, and the 122B bounded smoke test completed at 1.04 tok/s for one decode token. These are CPU measurements on the development desktop, not guaranteed performance on other machines.
+
 ## References
 
 - [katali2 reference notes](docs/FUTURE.md)
