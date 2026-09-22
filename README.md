@@ -120,6 +120,10 @@ Approximate GGUF storage options:
 
 An optional MTP sidecar is approximately 2.6 GB. The first Qwen3.8 milestone is compatibility only: inspect the GGUF, load it, and complete one short CPU smoke generation. Optimization comes later.
 
+### Qwen3.5-397B smoke result
+
+The seven-shard Q4_K_M model was loaded successfully on the CPU/SSD path. A bounded generation completed at approximately **0.11 tokens/sec decode** after a roughly **356-second prefill**. A second 8-token request reached the model's thinking output but stopped before the final answer because the output limit was intentionally short. This confirms compatibility, not usable performance.
+
 ## References
 
 - [katali2 reference notes](docs/FUTURE.md)
