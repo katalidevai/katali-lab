@@ -1,6 +1,6 @@
 # katali-lab
 
-`katali-lab` is an elastic native inference engine for large quantized Qwen3.5 MoE models. It adapts the proven katali2 elastic expert-cache and SSD/mmap ideas to ordinary GGUF model files.
+`katali-lab` is a specialized native inference engine for selected large and small quantized Qwen models. Each flagship model receives architecture-specific optimization, measurement, and correctness validation rather than a generic one-size-fits-all path. It adapts the proven katali2 elastic expert-cache and SSD/mmap ideas to ordinary GGUF model files.
 
 KATALI scales across whatever hardware is present: **CPU + system RAM + SSD** by default, extended to **GPU + CPU + system RAM + SSD** when a compatible NVIDIA CUDA GPU is available. Models larger than available RAM *or* VRAM still run through elastic memory management.
 
@@ -18,7 +18,17 @@ The current winning CUDA stack is model-specific and experimental: Qwen3.6-35B-A
 
 Kernel work was also tried and **rejected on measurement**: a 4-way unrolled column loop gained 11–15 % at n_sel≤4 but **lost 22 % at n_sel=8**, the engine's operating point, so `KATALI_GEMV_UNROLL=1` remains the default. The next phase should raise the GPU duty cycle (async overlap of GPU MoE with CPU attention), not micro-tune GEMV. Default behaviour is byte-for-byte the original CPU path (re-verified: 3.05 tok/s, `Manila`, 0 CUDA calls).
 
-## Current models
+## Specialized flagship models
+Katali-lab focuses its deepest optimization work on a small number of flagship models. These receive dedicated CPU/RAM/SSD and CUDA execution profiles, model-specific scheduling, and measured regression gates.
+
+| Model | Specialization status | Verified result |
+|---|---|---|
+| **Qwen3.6-35B-A3B** | Primary large flagship; hybrid GDN/MoE CPU + CUDA profile | CUDA GDN stack approximately 6.0–6.1 tok/s short decode and 5.9–6.0 tok/s at 32 tokens |
+| **Qwen3-1.7B** | Primary small flagship; dense CPU + CUDA profile | **20.65 tok/s at 16 tokens; 23.59 tok/s at 32 tokens** on RTX 4060, versus 3.26 tok/s CPU |
+
+“Specialized” means the model has been profiled and optimized as its own architecture. Optimizations are not assumed to transfer automatically to other model families.
+
+## Supported compatibility models
 
 | Model | Status | CPU profile | Official model | GGUF source |
 |---|---|---|---|---|
@@ -29,7 +39,7 @@ Kernel work was also tried and **rejected on measurement**: a 4-way unrolled col
 
 The official model cards are the source of truth for model configuration and licensing. GGUF repositories are community conversions; verify quantization, shard completeness, and tokenizer files before use.
 
-## Current flagship: Qwen3.6-35B-A3B
+## Additional compatibility validation
 
 | Model | Status | Why it is next | CPU reality |
 |---|---|---|---|
@@ -137,6 +147,23 @@ Measured on the Manila paragraph benchmark: approximately **6.0–6.1 tok/s at m
 These measurements are **specific to Qwen3.6-35B-A3B** and are not a claim about every model. The 122B, Coder-Next, 397B, dense models, and different MoE/GDN layouts require separate validation.
 
 The following experiments were tested for correctness but reverted because they did not beat the winning stack: full GQA CUDA, standalone GPU RMSNorm/residual/router, activation residency, device-side MoE boundary, and MoE stream overlap. Their reports remain archived locally. They are not enabled by default and are not part of the stable release.
+## Dense Qwen3 backend
+
+The official repository includes a dense Qwen2/Qwen3 backend migrated from Katali-GGUF. Build it with:
+
+```bat
+build-qwen3.bat
+```
+
+This produces `katali-lab-qwen3.exe`, which supports dense Qwen3 models such as Qwen3-1.7B. Example:
+
+```bat
+katali-lab-qwen3.exe inspect C:\models\qwen3-1.7b-gguf\qwen3-1.7b-q4_k_m.gguf
+katali-lab-qwen3.exe run C:\models\qwen3-1.7b-gguf\qwen3-1.7b-q4_k_m.gguf --prompt "What is the capital of the Philippines? Answer one word." --max-tokens 8 --no-think
+```
+
+The dense backend is intentionally separate from the specialized Qwen3.6-35B MoE executable while the common backend dispatcher is being consolidated.
+Current Qwen3-1.7B CUDA result: the architecture-gated dense CUDA matvec path reaches **20.65 tok/s at 16 tokens** and **23.59 tok/s at 32 tokens** on the RTX 4060, versus approximately **3.26 tok/s CPU**. Five CPU/CUDA greedy oracle cases are byte-identical. The current optimization caches quantized weights on the GPU and batches QKV/gate-up projections; full device-resident RMSNorm/attention/activation execution remains the next engineering phase.
 ## Local builds
 
 The repository build produces:
@@ -237,5 +264,6 @@ The seven-shard Q4_K_M model was loaded successfully on the CPU/SSD path. A boun
 - [122B CPU optimization profile](docs/122B_OPTIMIZE.md)
 - [GGUF parity checklist](docs/KATALI2_GGUF_PARITY.md)
 - [Qwen3.5 collection](https://huggingface.co/collections/Qwen/qwen35)
+
 
 
