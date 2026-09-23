@@ -25,6 +25,7 @@ Kernel work was also tried and **rejected on measurement**: a 4-way unrolled col
 | Qwen3.5-35B-A3B | Supported | Automatic routed-expert fusion; mmap/cache profile | [Qwen/Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) | [bartowski GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-35B-A3B-GGUF) |
 | Qwen3.5-122B-A10B | Supported | Raw mmap; expert cache disabled by default; fusion disabled for sustained CPU decode | [Qwen/Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) | [bartowski GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-122B-A10B-GGUF) |
 | Qwen3-Coder-Next 80B-A3B | Supported | Hybrid DeltaNet/attention; 512-expert elastic cache; CPU-first profile | [Qwen/Qwen3-Coder-Next](https://huggingface.co/Qwen/Qwen3-Coder-Next) | [Qwen GGUF](https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF) |
+| Qwen3-Coder-30B-A3B | Supported | Standard full-attention MoE; 128-expert elastic cache | [Qwen/Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) | [GGUF source](https://huggingface.co/Zoed/Qwen3-Coder-30B-A3B-Instruct) |
 
 The official model cards are the source of truth for model configuration and licensing. GGUF repositories are community conversions; verify quantization, shard completeness, and tokenizer files before use.
 
@@ -50,6 +51,8 @@ The current CUDA-enabled executable was tested against both supported Qwen3.5 mo
 These are short smoke-test measurements, not universal benchmarks. The 122B model runs correctly through the elastic SSD → RAM → VRAM path, but its larger working set causes substantially more transfer and eviction pressure on this machine.
 
 Qwen3-Coder-Next is also integrated and validated. Its Q4_K_M GGUF is approximately 45.09 GiB locally, with 80B total parameters and 3B active parameters. On the development RTX 4060, the matching smoke test measured **0.692 tok/s prefill and 0.484 tok/s decode with CUDA**, versus **0.880 tok/s prefill and 2.028 tok/s decode with CUDA disabled**. CPU mode is currently faster for this model; use `KATALI_CUDA=0` to disable GPU detection, or `KATALI_CUDA_MOE=1` to enable the experimental VRAM expert tier.
+
+Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks.
 
 ## Future model roadmap
 
