@@ -36,6 +36,9 @@ Katali-lab focuses its deepest optimization work on a small number of flagship m
 | Qwen3.5-122B-A10B | Supported | Raw mmap; expert cache disabled by default; fusion disabled for sustained CPU decode | [Qwen/Qwen3.5-122B-A10B](https://huggingface.co/Qwen/Qwen3.5-122B-A10B) | [bartowski GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-122B-A10B-GGUF) |
 | Qwen3-Coder-Next 80B-A3B | Supported | Hybrid DeltaNet/attention; 512-expert elastic cache; CPU-first profile | [Qwen/Qwen3-Coder-Next](https://huggingface.co/Qwen/Qwen3-Coder-Next) | [Qwen GGUF](https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF) |
 | Qwen3-Coder-30B-A3B | Supported | Standard full-attention MoE; 128-expert elastic cache | [Qwen/Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) | [GGUF source](https://huggingface.co/Zoed/Qwen3-Coder-30B-A3B-Instruct) |
+| Qwen3-4B | Supported | Dense Qwen3 CUDA/CPU backend; model-specific profiling in progress | [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) | [Official GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
+
+Qwen3-4B is a supported dense-model compatibility target. The current RTX 4060 smoke test reached **3.98 tok/s at 16 tokens** and **6.15 tok/s at 32 tokens** with CUDA, versus approximately **1.21** and **1.28 tok/s** on CPU; the 32-token CPU/CUDA output was byte-identical. It remains below the two specialized flagship profiles.
 
 The official model cards are the source of truth for model configuration and licensing. GGUF repositories are community conversions; verify quantization, shard completeness, and tokenizer files before use.
 
