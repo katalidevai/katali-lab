@@ -15,7 +15,8 @@ int katali_dense_cuda_enabled(void) {
     if (!g_checked) {
         g_checked = 1;
         const char *e = getenv("KATALI_CUDA");
-        g_enabled = !(e && e[0] == '0') && katali_cuda_probe() != 0; fprintf(stderr, "phase: dense cuda %s (%s)\\\\n", g_enabled ? "ON" : "OFF", katali_cuda_status());
+        /* Dense Qwen3 is CPU-first; opt into CUDA explicitly with KATALI_CUDA=1. */
+        g_enabled = e && (e[0] == '1' || e[0] == 'y' || e[0] == 'Y') && katali_cuda_probe() != 0; fprintf(stderr, "phase: dense cuda %s (%s)\\\\n", g_enabled ? "ON" : "OFF", katali_cuda_status());
     }
     return g_enabled;
 }
