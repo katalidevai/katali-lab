@@ -54,6 +54,8 @@ Qwen3-Coder-Next is also integrated and validated. Its Q4_K_M GGUF is approximat
 
 The unified executable was revalidated after restoring the combined `ssm_in`/`ssm_ba` tensor mapping used by Coder-Next: a current CPU smoke test reached **2.31 tok/s decode**, while CUDA reached **1.86 tok/s decode** with 480 GPU experts and zero fallbacks. Both modes generated successfully.
 
+For the Coder-Next CUDA path, async MoE submission is the selected profile: a matched two-token A/B measured **2.016 tok/s** async versus **1.451 tok/s** synchronous. Increasing the VRAM budget to 7.5 GiB reached **1.857 tok/s**, and enabling DP4A reached **1.520 tok/s**, so neither is enabled as a default optimization. The current bottleneck is expert-cache upload/synchronization rather than the GEMV kernel.
+
 Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks.
 
 ### Qwen3-Coder-30B CPU/GPU side-by-side
