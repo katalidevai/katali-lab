@@ -54,6 +54,17 @@ Qwen3-Coder-Next is also integrated and validated. Its Q4_K_M GGUF is approximat
 
 Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks.
 
+### Qwen3-Coder-30B CPU/GPU side-by-side
+
+Same model, prompt, `--max 8`, cache settings, and RTX 4060 test machine:
+
+| Mode | Answer | Prefill | Decode | Expert execution |
+|---|---:|---:|---:|---|
+| CUDA GPU | `4` | 1.30 tok/s | 1.43 tok/s | 320 GPU experts, 0 fallbacks |
+| CPU + system RAM + SSD | `4` | 2.73 tok/s | 3.07 tok/s | CUDA disabled |
+
+This short test favors CPU because GPU startup and transfer overhead dominate. Longer prompts or sustained generation can change the result.
+
 ## Future model roadmap
 
 1. **Qwen3.8-Flash-Next** — next parked flagship and new architecture target.
