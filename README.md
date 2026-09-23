@@ -8,7 +8,7 @@ CUDA is **optional and never required**. The engine is built by MinGW gcc and **
 
 **Measured status:** the CUDA kernels are correct (`rel_L2 ≈ 2e-7` against the engine's own CPU kernels on real GGUF tensors — see `cuda-check` and `cuda-check-moe`) and the kernels run **6.9–10.9× faster than the CPU** on DRAM-bound expert traffic (`katali-lab.exe cuda-bench`). Layer-level MoE fusion is implemented: one GPU call per MoE layer instead of one per expert, cutting CUDA API calls/token **8×**, kernel launches **6×** and device syncs **24×**, all with byte-identical output.
 
-It is nonetheless **still slower end-to-end than CPU**, so the GPU MoE path stays **opt-in** (`KATALI_CUDA_MOE=1`). See `docs/CUDA_PLAN.md` §12–§15.
+The current winning CUDA stack is model-specific and experimental: Qwen3.6-35B-A3B reached about **6.0–6.1 tok/s at 16 tokens** and **5.9–6.0 tok/s at 32 tokens**, versus about 3.7 tok/s CPU, with byte-identical greedy output. Keep it opt-in (`KATALI_CUDA_MOE=1`); stable defaults remain CPU-first. See the latest archived reports under `_gdn_bench`, `_moe_device_bench`, and `_moe_overlap_bench`.
 
 **Stage A (this phase): DP4A + q8_1 activations.** The inner GEMV loop no longer dequantizes every weight element to float. The layer's activation is quantized **once** to q8_1 on the device and every selected expert's quants are dotted against it with `__dp4a` (the technique llama.cpp uses). Measured: the fused layer at the engine's operating point (`n_sel=8`) went **10.0 → 3.20 ms per 24 calls (3.1×)**, 36.3 → **114 GB/s** against a 134 GB/s no-arithmetic ceiling, with the q8_1 quantization *counted* (0.27 ms, 8 %). End-to-end the GPU arm rose **1.720 → 2.245 tok/s (+31 %)** in a matched A/B (and 1.705 → 2.268 in a second run), with the GPU MoE window per token falling **209.7 → 70.1 ms** and the CPU's GPU wait **221.7 → 79.8 ms**. Output was **byte-identical** to CPU and to the fp32 CUDA path on the reference prompt (`8EC7BAC655`), and a new synthetic test (`cuda-dp4a-selftest`) proves the kernels match the fp32 kernels to **rel_L2 8.3e-07** when the activation is exactly representable; on real weights the residual 7.2e-03 is q8_1 activation rounding, with 0 elements outside `1e-3·(1+|ref|)`. Enabled with `KATALI_CUDA_DP4A=1`; **default OFF**, so the default path is unchanged. See `docs/CUDA_PLAN.md` §17.
 
@@ -29,7 +29,7 @@ Kernel work was also tried and **rejected on measurement**: a 4-way unrolled col
 
 The official model cards are the source of truth for model configuration and licensing. GGUF repositories are community conversions; verify quantization, shard completeness, and tokenizer files before use.
 
-## Validated flagship
+## Current flagship: Qwen3.6-35B-A3B
 
 | Model | Status | Why it is next | CPU reality |
 |---|---|---|---|
@@ -75,7 +75,7 @@ Captured sustained test, same prompt and `--max 64`: CUDA produced **2.109 tok/s
 
 ## Future model roadmap
 
-1. **Qwen3.8-Flash-Next** — next parked flagship and new architecture target.
+1. **Qwen3.6-35B-A3B** — current flagship and primary optimization target.
 2. **Qwen3.5 quantization variants** — evaluate Q3/Q4/Q5 GGUF variants for CPU RAM and SSD tradeoffs.
 3. **Smaller Qwen3.5 text models** — useful regression and low-RAM test targets.
 4. **Other architectures** — explicitly deferred until the Qwen3.8 backend is understood.
@@ -118,8 +118,25 @@ build_cuda.bat     REM katali_cuda.dll (nvcc + MSVC) — optional
 
 Environment: `KATALI_CUDA=0` disables detection, `KATALI_CUDA_DLL` overrides the DLL path, `KATALI_CUDA_MOE=1` enables the experimental VRAM expert tier, and `KATALI_VRAM_GB` caps its budget.
 
-The application remains one executable. Active expert weights can move to VRAM while cold experts remain in the system-RAM cache or on SSD. Without CUDA—or if CUDA initialization fails—the engine automatically falls back to the CPU path. GPU kernels currently cover the quantized GEMV/matmul family and routed MoE experts; Gated DeltaNet and full-attention GPU kernels are not implemented yet.
+The application remains one executable. Active expert weights can move to VRAM while cold experts remain in the system-RAM cache or on SSD. Without CUDA—or if CUDA initialization fails—the engine automatically falls back to the CPU path. GPU kernels currently cover the quantized GEMV/matmul family, routed MoE experts, and the experimental Qwen3.5 Gated DeltaNet/GDN path. Full GQA remains CPU-side because the measured CUDA port was slower. These results are not automatically transferable to Qwen3-Coder-Next, Qwen3.5-122B, dense models, or other architectures.
 
+## Latest CUDA experiment status (2026-09-23)
+
+The latest verified winner is the Qwen3.6-35B-A3B Q4_K_M path on the development RTX 4060:
+
+```text
+KATALI_VRAM_POOL=1
+KATALI_UPLOAD_BATCH=1
+KATALI_CUDA_MOE=1
+KATALI_CUDA_DP4A=1
+KATALI_CUDA_GDN=1
+```
+
+Measured on the Manila paragraph benchmark: approximately **6.0–6.1 tok/s at max16** and **5.9–6.0 tok/s at max32**, compared with approximately **3.7 tok/s CPU**. The generated text passed byte-identical greedy oracle checks. The improvement is primarily from moving the 30 GDN/DeltaNet layers to CUDA and using DP4A fused MoE kernels.
+
+These measurements are **specific to Qwen3.6-35B-A3B** and are not a claim about every model. The 122B, Coder-Next, 397B, dense models, and different MoE/GDN layouts require separate validation.
+
+The following experiments were tested for correctness but reverted because they did not beat the winning stack: full GQA CUDA, standalone GPU RMSNorm/residual/router, activation residency, device-side MoE boundary, and MoE stream overlap. Their reports remain archived locally. They are not enabled by default and are not part of the stable release.
 ## Local builds
 
 The repository build produces:
@@ -190,7 +207,7 @@ The current published executables were tested locally after the final rebuild. `
 
 ## Next architecture target: Qwen3.8-Flash-Next
 
-After the Qwen3.5-397B smoke test, the next planned model family is **Qwen3.8-Flash-Next**. It is not a drop-in Qwen3.5 model: current GGUF metadata identifies it as `qwen4exp`, with a newer sparse-expert design and a large n-gram embedding table. It therefore needs a separate architecture backend while reusing Katali-lab's general elastic storage ideas.
+The current flagship is **Qwen3.6-35B-A3B**. After stabilizing and optimizing it, the next planned model family is **Qwen3.8-Flash-Next**. It is not a drop-in Qwen3.5 model: current GGUF metadata identifies it as `qwen4exp`, with a newer sparse-expert design and a large n-gram embedding table. It therefore needs a separate architecture backend while reusing Katali-lab's general elastic storage ideas.
 
 Official model: [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next). CPU-oriented GGUF reference: [Unsloth Qwen3.8-Flash-Next GGUF](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF).
 
@@ -220,3 +237,5 @@ The seven-shard Q4_K_M model was loaded successfully on the CPU/SSD path. A boun
 - [122B CPU optimization profile](docs/122B_OPTIMIZE.md)
 - [GGUF parity checklist](docs/KATALI2_GGUF_PARITY.md)
 - [Qwen3.5 collection](https://huggingface.co/collections/Qwen/qwen35)
+
+
