@@ -135,6 +135,30 @@ katali-lab.exe generate C:\models\Qwen_Qwen3.5-122B-A10B-Q4_K_M\Qwen_Qwen3.5-122
 
 For CPU-only operation, use memory mapping and the model-specific profiles in `docs/35B_OPTIMIZE.md` and `docs/122B_OPTIMIZE.md`. `--max` limits generated tokens, `--pin` controls the pinned-cache percentage, and `--cache-gb` sets the expert-cache budget.
 
+## Local HTTP API
+
+Start the built-in loopback API server:
+
+```bat
+katali-lab.exe api --port 8080
+```
+
+It listens only on `127.0.0.1`. Check that it is alive:
+
+```bat
+curl http://127.0.0.1:8080/health
+```
+
+Generate text using either `POST /generate` or the OpenAI-compatible `POST /v1/chat/completions` route:
+
+```bat
+curl -X POST http://127.0.0.1:8080/generate ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"C:\\models\\Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf\",\"prompt\":\"What is the capital of the Philippines?\",\"max_tokens\":8}"
+```
+
+The `model` field is optional and defaults to the 35B model path shown above. The request accepts `prompt` (or `content`) and `max_tokens` (or `max`). The API returns a JSON response containing the generated text in `choices[0].message.content`.
+
 ## Build verification
 
 The current published executables were tested locally after the final rebuild. `katali-lab.exe selftest` passed, 35B generation completed coherently at 2.25 tok/s for one decode token, and the 122B bounded smoke test completed at 1.04 tok/s for one decode token. These are CPU measurements on the development desktop, not guaranteed performance on other machines.
