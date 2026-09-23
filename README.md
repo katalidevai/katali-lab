@@ -4,6 +4,8 @@
 
 KATALI scales across whatever hardware is present: **CPU + system RAM + SSD** by default, extended to **GPU + CPU + system RAM + SSD** when a compatible NVIDIA CUDA GPU is available. Models larger than available RAM *or* VRAM still run through elastic memory management.
 
+**Public hardware policy:** Qwen3-1.7B and Qwen3-4B are CPU-first models intended to run on ordinary 8 GB laptops with system RAM and SSD-backed mmap. Qwen3-8B also starts CPU-first; CUDA is an optional accelerator when detected and measured faster. No model requires a GPU, fixed VRAM size, or a specific NVIDIA card.
+
 CUDA is **optional and never required**. The engine is built by MinGW gcc and **does not link against any CUDA library**; the GPU backend is a separate `katali_cuda.dll` (built by nvcc + MSVC, since nvcc cannot use a MinGW host compiler) that is discovered at runtime with `LoadLibrary`. Without that DLL, without a driver, or without an NVIDIA GPU, the engine runs the unchanged CPU path and reports why.
 
 **Measured status:** the CUDA kernels are correct (`rel_L2 ≈ 2e-7` against the engine's own CPU kernels on real GGUF tensors — see `cuda-check` and `cuda-check-moe`) and the kernels run **6.9–10.9× faster than the CPU** on DRAM-bound expert traffic (`katali-lab.exe cuda-bench`). Layer-level MoE fusion is implemented: one GPU call per MoE layer instead of one per expert, cutting CUDA API calls/token **8×**, kernel launches **6×** and device syncs **24×**, all with byte-identical output.
