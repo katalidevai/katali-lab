@@ -65,6 +65,8 @@ Same model, prompt, `--max 8`, cache settings, and RTX 4060 test machine:
 
 This short test favors CPU because GPU startup and transfer overhead dominate. Longer prompts or sustained generation can change the result.
 
+Captured sustained test, same prompt and `--max 64`: CUDA produced **2.109 tok/s decode** after **3.441 tok/s prefill**, while CPU + system RAM + SSD produced **3.540 tok/s decode** after **3.041 tok/s prefill**. Both returned a coherent answer. For this 30B model and RTX 4060, CPU remains the faster default for this workload; CUDA remains available for experimentation and larger workloads.
+
 ## Future model roadmap
 
 1. **Qwen3.8-Flash-Next** — next parked flagship and new architecture target.
