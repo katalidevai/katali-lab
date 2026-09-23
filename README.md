@@ -58,7 +58,7 @@ The current CPU release also includes a cache-friendly DeltaNet state-loop optim
 
 For the Coder-Next CUDA path, async MoE submission is the selected profile: a matched two-token A/B measured **2.016 tok/s** async versus **1.451 tok/s** synchronous. Increasing the VRAM budget to 7.5 GiB reached **1.857 tok/s**, and enabling DP4A reached **1.520 tok/s**, so neither is enabled as a default optimization. The current bottleneck is expert-cache upload/synchronization rather than the GEMV kernel.
 
-Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks.
+Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks. On the corrected CPU path, matched 16-token runs reached **4.64 and 5.06 tok/s decode** with `--cache-gb 8 --pin 50`; this is the recommended 30B CPU profile. The same cache at `--pin 25` measured 4.39 tok/s, while 12 GiB/50% measured 4.13 tok/s.
 
 ### Qwen3-Coder-30B CPU/GPU side-by-side
 
