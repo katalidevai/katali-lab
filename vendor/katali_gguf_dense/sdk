@@ -1,0 +1,22 @@
+; Katali-GGUF binary SDK — exported ABI surface (v1)
+;
+; This file is the complete list of symbols the DLL exports. Nothing else from
+; the private engine is visible to SDK consumers, and adding a symbol here is an
+; ABI change that must be reflected in the SDK header's version macros.
+LIBRARY katali_gguf
+EXPORTS
+    katali_sdk_abi_version
+    katali_sdk_version_string
+    katali_sdk_last_error
+    katali_sdk_model_open
+    katali_sdk_model_close
+    katali_sdk_model_info
+    katali_sdk_session_create
+    katali_sdk_session_destroy
+    katali_sdk_session_reset
+    katali_sdk_generate
+    katali_sdk_generate_alloc
+    katali_sdk_generate_stream
+    katali_sdk_string_free
+    katali_sdk_cancel
+    katali_sdk_session_stats

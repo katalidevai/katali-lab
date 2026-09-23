@@ -5,6 +5,8 @@
 KATALI scales across whatever hardware is present: **CPU + system RAM + SSD** by default, extended to **GPU + CPU + system RAM + SSD** when a compatible NVIDIA CUDA GPU is available. Models larger than available RAM *or* VRAM still run through elastic memory management.
 
 **Public hardware policy:** Qwen3-1.7B and Qwen3-4B are CPU-first models intended to run on ordinary 8 GB laptops with system RAM and SSD-backed mmap. Qwen3-8B also starts CPU-first; CUDA is an optional accelerator when detected and measured faster. No model requires a GPU, fixed VRAM size, or a specific NVIDIA card.
+The dense Qwen3 backend uses a **4,096-token default KV budget** for laptop-safe memory use; larger contexts remain explicitly configurable with `--ctx`. On Qwen3-4B this reduces nominal default resident memory from about 11.5 GB to about 1.16 GB before optional CUDA allocations.
+
 
 CUDA is **optional and never required**. The engine is built by MinGW gcc and **does not link against any CUDA library**; the GPU backend is a separate `katali_cuda.dll` (built by nvcc + MSVC, since nvcc cannot use a MinGW host compiler) that is discovered at runtime with `LoadLibrary`. Without that DLL, without a driver, or without an NVIDIA GPU, the engine runs the unchanged CPU path and reports why.
 
