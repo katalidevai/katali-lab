@@ -37,6 +37,17 @@ Links: [official model](https://huggingface.co/Qwen/Qwen3.5-397B-A17B), [GGUF se
 
 The 397B smoke test confirmed hidden size 4096, 61 layers, 512 experts, 10 routed experts plus 1 shared expert, and seven-shard GGUF loading. It is compatible, but not yet performance-practical on CPU.
 
+## Latest CUDA model verification
+
+The current CUDA-enabled executable was tested against both supported Qwen3.5 models on an RTX 4060 (8 GB VRAM), with `KATALI_CUDA_MOE=1`:
+
+| Model | Result | Prefill | Decode | GPU result |
+|---|---|---:|---:|---|
+| Qwen3.5-35B-A3B Q4_K_M | `Manila` | 3.46 tok/s | 3.11 tok/s | 640 GPU experts, 0 CPU experts, 0 fallbacks |
+| Qwen3.5-122B-A10B Q4_K_M | `Manila` | 0.465 tok/s | 0.267 tok/s | 768 GPU experts, 0 CPU experts, 0 fallbacks |
+
+These are short smoke-test measurements, not universal benchmarks. The 122B model runs correctly through the elastic SSD → RAM → VRAM path, but its larger working set causes substantially more transfer and eviction pressure on this machine.
+
 ## Future model roadmap
 
 1. **Qwen3.8-Flash-Next** — next parked flagship and new architecture target.
@@ -82,18 +93,7 @@ build_cuda.bat     REM katali_cuda.dll (nvcc + MSVC) — optional
 
 Environment: `KATALI_CUDA=0` disables detection, `KATALI_CUDA_DLL` overrides the DLL path, `KATALI_CUDA_MOE=1` enables the experimental VRAM expert tier, and `KATALI_VRAM_GB` caps its budget.
 
-Katali-lab is CPU-first today, but the planned GPU mode will use the same elastic model rather than requiring the whole model to fit in VRAM.
-
-At startup, the executable will detect whether an NVIDIA CUDA device and usable CUDA runtime are available:
-
-```text
-CUDA available:  SSD -> system RAM expert cache -> GPU VRAM -> CUDA compute
-CUDA unavailable: SSD -> system RAM expert cache -> CPU compute
-```
-
-The application will remain one executable. With CUDA available, active experts and compute state will move to VRAM while cold experts remain in the system-RAM cache or on SSD. Without CUDA—or if CUDA initialization fails—the engine will automatically fall back to the existing CPU path and report the reason.
-
-The planned CUDA backend will add GPU kernels for quantized matrix-vector operations, routed MoE experts, Gated DeltaNet, full attention, and state transfers. The CPU/SSD path remains the correctness reference and fallback. What is implemented today is the quantized GEMV/matmul family (Q4_K, Q6_K, Q8_0, Q4_0, F32) plus the VRAM tensor tier; GPU kernels for Gated DeltaNet and full attention are not written yet. CUDA support is intentionally limited to NVIDIA hardware; Vulkan, ROCm, and other GPU backends are out of scope.
+The application remains one executable. Active expert weights can move to VRAM while cold experts remain in the system-RAM cache or on SSD. Without CUDA—or if CUDA initialization fails—the engine automatically falls back to the CPU path. GPU kernels currently cover the quantized GEMV/matmul family and routed MoE experts; Gated DeltaNet and full-attention GPU kernels are not implemented yet.
 
 ## Local builds
 
