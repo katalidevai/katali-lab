@@ -52,6 +52,8 @@ These are short smoke-test measurements, not universal benchmarks. The 122B mode
 
 Qwen3-Coder-Next is also integrated and validated. Its Q4_K_M GGUF is approximately 45.09 GiB locally, with 80B total parameters and 3B active parameters. On the development RTX 4060, the matching smoke test measured **0.692 tok/s prefill and 0.484 tok/s decode with CUDA**, versus **0.880 tok/s prefill and 2.028 tok/s decode with CUDA disabled**. CPU mode is currently faster for this model; use `KATALI_CUDA=0` to disable GPU detection, or `KATALI_CUDA_MOE=1` to enable the experimental VRAM expert tier.
 
+The unified executable was revalidated after restoring the combined `ssm_in`/`ssm_ba` tensor mapping used by Coder-Next: a current CPU smoke test reached **2.31 tok/s decode**, while CUDA reached **1.86 tok/s decode** with 480 GPU experts and zero fallbacks. Both modes generated successfully.
+
 Qwen3-Coder-30B-A3B is integrated and validated as standard Qwen3 MoE. Its Q4_K_M GGUF is approximately 17.28 GiB. The smoke test measured **3.62 tok/s CPU decode** and **6.29 tok/s CUDA decode** on the RTX 4060, with 384 GPU experts and zero GPU fallbacks.
 
 ### Qwen3-Coder-30B CPU/GPU side-by-side
