@@ -813,7 +813,10 @@ void katali_ggml_matvec_role(uint32_t type, const void *w,
         c.q4k_sums = q4k_scratch;
     }
 
-    if (n_threads <= 1 || rows < 2) {
+    int nt = n_threads > 0 ? n_threads : katali_gguf_get_threads();
+    if (nt < 1) nt = 1;
+    if (nt > (int)rows) nt = (int)rows;
+    if (nt <= 1 || rows < 2) {
         if (c.use_rows &&
             katali_ggml_matvec_rows(type, c.w, rows, cols, rb, x, y, 0, rows,
                                     cancel, c.q4k_sums) == 0) {
@@ -837,10 +840,10 @@ void katali_ggml_matvec_role(uint32_t type, const void *w,
                 cs.rows = r1 - r0;
                 cs.w = c.w + r0 * rb;
                 cs.y = c.y + r0;
-                katali_gguf_parallel_run_n(n_threads, matvec_worker, &cs);
+                katali_gguf_parallel_run_n(nt, matvec_worker, &cs);
             }
         } else {
-            katali_gguf_parallel_run_n(n_threads, matvec_worker, &c);
+            katali_gguf_parallel_run_n(nt, matvec_worker, &c);
         }
     }
     double dt = prof_now() - t0;
