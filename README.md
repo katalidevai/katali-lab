@@ -22,6 +22,189 @@ The current winning CUDA stack is model-specific and experimental: Qwen3.6-35B-A
 
 Kernel work was also tried and **rejected on measurement**: a 4-way unrolled column loop gained 11–15 % at n_sel≤4 but **lost 22 % at n_sel=8**, the engine's operating point, so `KATALI_GEMV_UNROLL=1` remains the default. The next phase should raise the GPU duty cycle (async overlap of GPU MoE with CPU attention), not micro-tune GEMV. Default behaviour is byte-for-byte the original CPU path (re-verified: 3.05 tok/s, `Manila`, 0 CUDA calls).
 
+## Qwen3.8-27B support
+
+`Qwen3.8-27B-Q4_K_M.gguf` is now a supported model. It is a **fourth**
+architecture variant, not a Qwen3.6-35B sibling: `general.architecture` is
+`qwen35`, the trunk is 64 blocks (**48 GDN/DeltaNet + 16 full attention**) with one
+MTP block appended, and the feed-forward is **dense** - there are no
+`ffn_*_exps` tensors and no `expert_count` metadata key at all.
+
+The engine previously treated it as a 256-expert MoE, because it started from the
+`qwen35moe` defaults and only cleared them when a model had neither expert *nor*
+ssm tensors, and `katali_gguf_get_int()` returns the caller's default for a key
+that is missing. The result was an empty expert index and
+`host_generate: layer-major prefill failed` before the first token. Models are now
+classified from **tensor evidence**, so this dense hybrid layout is detected and
+served by the dense FFN path.
+
+Measured on the development machine (RTX 4060 present but unused; CPU only):
+
+| Metric | Value |
+|---|---|
+| Load / open | 0.57 s (mmap, lazy) |
+| Prefill, 40-token prompt | 0.735-0.790 tok/s |
+| Prefill, 75-token prompt (batched) | 1.14 tok/s |
+| Decode | 0.81-0.85 tok/s |
+| Weight traffic per decoded token | **15.3 GiB** (a dense model re-reads every layer) |
+| Runtime context | **2048 by default, configurable with `--ctx N`** (validated up to 65536; memory-budgeted and refused when unsafe). The metadata advertises 262144 - that is a training ceiling, not something this runtime serves |
+| Greedy answer correctness | `Manila`, byte-identical across runs |
+
+Because the FFN is dense, one decoded token must stream ~15.3 GiB of weights, so
+CPU matvec throughput - not routing and not the GPU - is the binding constraint.
+The batched prefill introduced for this layout streams those weights once for the
+whole prompt instead of once per token: **1.41x** on a 75-token prompt
+(95.7 s -> 67.9 s) with byte-identical output.
+
+Qwen3.8-27B is **not** recommended for interactive use on a CPU-only machine: a
+decoded token costs ~1.2 s. Use it with a bounded `--max`.
+
+## Context configuration and the CUDA rebuild
+
+**The runtime context is now explicit.** `generate` and `open` accept `--ctx N`, and
+the HTTP API accepts `"ctx": N`. The default is 2048 (unchanged behaviour) and the
+minimum is 256. Every request is validated and budgeted **before** anything is
+allocated, and the decision is printed as a `context:` block:
+
+```text
+context:
+  requested: 0 (default)
+  effective: 2048
+  ctx_train_metadata: 262144   [metadata ceiling - NOT served by this runtime]
+  kv_bytes: 256.00 MiB
+  kv_location: system RAM
+  estimated_ram: 464.06 MiB (KV + state + scratch; not reclaimable)
+  estimated_vram: 0.00 MiB
+  status: ok
+```
+
+Two bounds are enforced: the hard (non-reclaimable) allocation must fit in
+available RAM minus reserves, and it plus the resident weights must fit in total
+RAM minus reserves or the engine would thrash. Reserves are never consumed
+(10 % of RAM, minimum 1 GiB, plus 768 MiB for the front-ends).
+
+Measured on Qwen3.8-27B: `--ctx` 2048/4096/8192/16384/32768/65536 are **accepted**
+(KV 256 MiB to 8 GiB), 128 is **refused** (below minimum), 262144 is **clamped to
+94044** with the numbers that forced it, and 400000 is **refused** (beyond the
+trained context). 1M context is **not implemented and not claimed** - it would need
+YaRN/rope support that does not exist here.
+
+**CUDA can be rebuilt.** `build_cuda.bat` is present (it had been archived under
+`_gpu_review/`; the root copy was restored and its LF-only line endings fixed).
+The pruned toolkit lives at `C:\Users\joanr\cuda\home` - `nvcc` 13.4.92,
+`ptxas`, `cudafe++`, the headers, and the NVVM library as
+`home\nvvm\bin\x64\nvvm64_40_0.dll` (**not** `libnvvm.dll`, which is why an
+earlier search concluded it was missing). MSVC `cl.exe` 14.44 is the host compiler.
+
+The rebuilt `katali_cuda.dll` passes every gate: `cuda-dp4a-selftest` at
+`rel_L2=8.342e-07` (identical to the recorded prebuilt value), `cuda-check` on the
+27B across F32/Q4_0/Q8_0/Q4_K/Q6_K on real tensors, and `cuda-check-moe` on the
+35B at `rel_L2=2.292e-07`. See [docs/PHASE2_REPORT.md](docs/PHASE2_REPORT.md).
+
+## Persistent attention/GDN residency tier (opt-in)
+
+A dense decoder re-reads every weight on every token, so the attention/GDN
+projections (32.1 % of the per-token byte budget on the 27B) are a candidate for
+persistent VRAM residency. `src/dense_tier.c` is that tier: a **residency table**
+over the one existing device allocator (`katali_cuda_malloc`), not a second
+allocator and not an LRU cache.
+
+```text
+KATALI_DENSE_GPU=1                       request the tier (default: off, no effect)
+KATALI_DENSE_TIER=attn,gdn,lm            which groups to admit (also: all, ffn*)
+KATALI_DENSE_GPU=auto                    planner picks the largest safe wired set
+KATALI_DENSE_TIER_GB=N                   cap the device budget explicitly
+```
+
+Admission is **whole-layer**: a layer whose attention set is only partly resident
+would pay a device round trip *and* the CPU stream for the same activation, so a
+layer is costed before a byte is allocated and declined entirely if it does not
+fit. Roles with no device kernel behind them are never admitted - `DTR_ALPHA`/
+`DTR_BETA` (48-float outputs: one GPU round trip costs more than the CPU matvec
+it replaces), the norm weights (consumed by in-place host RMSNorm, not by a
+matvec), and the dense FFN (out of scope) - so the reported size is residency that
+is actually *used* rather than "fits on paper".
+
+The tier requires model evidence, not a model name: a **dense** model (0 experts)
+that has **GDN/linear-attention** layers. Qwen3.8-27B qualifies; Qwen3-1.7B/4B/8B
+(pure full-attention dense) do not, and the MoE models use the existing expert
+VRAM tier instead. With `KATALI_DENSE_GPU` unset nothing is opened for any model.
+
+Two correctness invariants are enforced structurally rather than by convention:
+
+* **Activation identity is `(generation, layer, act)`.** `dense_tier_token_begin()`
+  is called at every token and every prefilled position, and the activation buffer
+  is only reused inside one generation *and* for the same named activation
+  (`DTR_ACT_LAYER_IN` / `DTR_ACT_ATTN_OUT` / `DTR_ACT_SSM_OUT` / `DTR_ACT_LM_IN`).
+  `dense-tier-test` proves both halves: the same key with a new generation must
+  change the result, and the same key *without* a new generation must return the
+  previous answer (the hazard is demonstrated, not merely avoided).
+* **Every device step has an unconditional CPU fallback.** `dense_tier_proj()` is
+  the only place a dense projection chooses its route.
+
+`katali-lab.exe dense-tier-test [model.gguf]` runs the per-role CPU-vs-GPU
+`rel_L2` report, the generation-guard proof, and a multi-token sequence with the
+tier ON versus BYPASSED in one process.
+
+## GPU matvec microbenchmark (`gpu-matvec-bench`)
+
+```bat
+katali-lab.exe gpu-matvec-bench 5
+```
+
+A standalone benchmark of the device matvec path - synthetic slabs, no model file,
+no tokenizer, no mmap - so a per-call claim is reproducible in ~90 seconds. Per
+shape it reports wall ms/call, event-measured device kernel ms/call, effective
+GB/s and launches / syncs / H2D / D2H per call, and it measures the device's raw
+read/copy bandwidth in the same process for a same-conditions reference. The two
+shapes that matter run under four conditions: back-to-back, whole round trip,
+100 ms spacing (the live decode's call spacing) and 11 CPU threads streaming RAM
+(the live decode's memory-system load).
+
+Its first result overturned the Phase 2 explanation. The 17-34 MiB attention/GDN
+projections cost **0.49-1.02 ms** standalone (35-40 GB/s) and stay there for
+30 000 calls, while the live engine pays **4.8-6.7 ms per crossing** for the same
+work. Neither idle spacing, nor CPU memory contention, nor 24 s of sustained load,
+nor reducing the engine to 2 CPU threads reproduces the gap - so the cost is per
+*crossing*, not per byte, and the next work is batching crossings
+(208/token -> 64) rather than kernel tuning. See
+[docs/PHASE3_REPORT.md](docs/PHASE3_REPORT.md).
+
+At model open the engine prints the plan it selected, on **stderr**, so stdout
+stays reserved for generated text and the HTTP API / GUI keep working unchanged:
+
+```text
+hardware-plan:
+  cpu: Intel(R) Core(TM) i5-10400 CPU @ 2.90GHz, 6 cores / 12 threads
+  simd: sse4.2+avx2+fma+f16c (binary built for avx2+fma+f16c)
+  threads: 12
+  ram_total: 32629.93 MiB   ram_avail: 24228.00 MiB   ram_budget: 12174.26 MiB
+  cuda: NVIDIA GeForce RTX 4060 (Ada Lovelace, sm_89, 24 SMs); vram total 8187.50 MiB free 7107.00 MiB budget 5330.25 MiB
+  cuda_enabled: yes   vram_tier: off
+  storage: >=4771 MiB/s sequential (OS cache warm; lower bound)
+  model: qwen35  class=hybrid GDN + dense FFN  layers=65 (trunk 64)
+  model_file: 16634.37 MiB   weight_bytes_per_token: 15703.85 MiB
+  model_mode: cpu
+  gpu_layers: 0   (no GPU layer tier for this model class)
+  kv_cache_location: system RAM
+  ctx_runtime: 2048 (requested 0, status ok, KV 0.25 GiB)
+  ctx_train_metadata: 262144   [training ceiling; the runtime serves 2048]
+  mmap: on (whole file, read-only), ECache copies into private slots
+  ecache: on   workers=0   pin=25%
+  prefetch: ssd=off route=off
+  reason: dense model: a decoded token re-reads every layer's weights (15703 MiB per token), so the win is CPU matvec throughput and a batched prefill, not per-call GPU work. CUDA stays available but unused.
+```
+
+`model_mode` is `cpu`, `hybrid` or `gpu`; `weight_bytes_per_token` is the decode
+memory budget (1092 MiB for the 35B MoE against 15704 MiB for the dense 27B, which
+is why the MoE decodes ~3x faster per token despite being a larger file); and
+`kv_cache_at_ctx` states the KV memory a 2K/8K/32K/64K context would need so a
+context claim can be checked instead of believed.
+
+Full hardware modes, flag reference, benchmark tables, correctness results,
+reverted experiments and known limitations:
+**[docs/BENCHMARK_REPORT.md](docs/BENCHMARK_REPORT.md)**.
+
 ## Specialized flagship models
 Katali-lab focuses its deepest optimization work on a small number of flagship models. These receive dedicated CPU/RAM/SSD and CUDA execution profiles, model-specific scheduling, and measured regression gates.
 
@@ -41,6 +224,7 @@ Katali-lab focuses its deepest optimization work on a small number of flagship m
 | Qwen3-Coder-Next 80B-A3B | Supported | Hybrid DeltaNet/attention; 512-expert elastic cache; CPU-first profile | [Qwen/Qwen3-Coder-Next](https://huggingface.co/Qwen/Qwen3-Coder-Next) | [Qwen GGUF](https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF) |
 | Qwen3-Coder-30B-A3B | Supported | Standard full-attention MoE; 128-expert elastic cache | [Qwen/Qwen3-Coder-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) | [GGUF source](https://huggingface.co/Zoed/Qwen3-Coder-30B-A3B-Instruct) |
 | Qwen3-4B | Supported | Dense Qwen3 CUDA/CPU backend; model-specific profiling in progress | [Qwen/Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) | [Official GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
+| **Qwen3.8-27B** | Supported | Hybrid GDN + **dense** FFN; tensor-evidence architecture detection; batched prefill; CPU-first | Qwen3.8-27B | `C:\models\qwen38-27b\Qwen3.8-27B-Q4_K_M.gguf` |
 
 Qwen3-4B is a supported dense-model compatibility target. The current RTX 4060 smoke test reached **3.98 tok/s at 16 tokens** and **6.15 tok/s at 32 tokens** with CUDA, versus approximately **1.21** and **1.28 tok/s** on CPU; the 32-token CPU/CUDA output was byte-identical. It remains below the two specialized flagship profiles.
 
@@ -233,7 +417,30 @@ curl -X POST http://127.0.0.1:8080/generate ^
   -d "{\"model\":\"C:\\models\\Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf\",\"prompt\":\"What is the capital of the Philippines?\",\"max_tokens\":8}"
 ```
 
-The `model` field is optional and defaults to the 35B model path shown above. The request accepts `prompt` (or `content`) and `max_tokens` (or `max`). The API returns a JSON response containing the generated text in `choices[0].message.content`.
+The request accepts `model` (**required** - the server no longer substitutes one
+hardcoded path, because that silently ran the wrong model), `prompt` (or
+`content`), `max_tokens` (or `max`) and `stream`.
+
+Non-streaming replies are a single OpenAI-shaped JSON object with the text in
+`choices[0].message.content`; the text is JSON-escaped, so quotes, backslashes and
+newlines in the model output cannot corrupt the reply.
+
+Set `"stream": true` to receive `text/event-stream` frames as the model writes
+them (the generator flushes after each token):
+
+```bat
+curl -N -X POST http://127.0.0.1:8080/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"C:\\models\\qwen38-27b\\Qwen3.8-27B-Q4_K_M.gguf\",\"prompt\":\"hi\",\"max_tokens\":8,\"stream\":true}"
+:: data: {"content":"The"}
+:: data: {"content":" capital"}
+:: data: [DONE]
+```
+
+`GET /health` reports `{"status":"ok","cpu_only":<bool>,"cuda":"<probe result>","cuda_device_usable":<bool>}`.
+The API runs generation in a child `katali-lab.exe generate` process, so it uses
+exactly the CLI's planner and prefill behaviour; the child's stderr is kept out of
+the reply.
 
 ## Build verification
 
@@ -266,6 +473,8 @@ The seven-shard Q4_K_M model was loaded successfully on the CPU/SSD path. A boun
 
 ## References
 
+- [Benchmark report: hardware, modes, flags, measurements, correctness, limitations](docs/BENCHMARK_REPORT.md)
+- [Phase 1 audit: repository, hardware and Qwen3.8-27B findings](docs/PHASE1_AUDIT.md)
 - [katali2 reference notes](docs/FUTURE.md)
 - [35B CPU optimization profile](docs/35B_OPTIMIZE.md)
 - [122B CPU optimization profile](docs/122B_OPTIMIZE.md)

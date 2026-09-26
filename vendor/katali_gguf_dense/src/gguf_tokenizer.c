@@ -251,6 +251,10 @@ int katali_gguf_tokenizer_init(KataliGgufTokenizer *t, const KataliGgufFile *f,
     t->pad_id = (int)katali_gguf_get_int(f, "tokenizer.ggml.padding_token_id", -1);
     t->unk_id = (int)katali_gguf_get_int(f, "tokenizer.ggml.unknown_token_id", -1);
     t->add_bos = katali_gguf_get_bool(f, "tokenizer.ggml.add_bos_token", 0);
+    {
+        const char *pre = katali_gguf_get_str(f, "tokenizer.ggml.pre", "", NULL);
+        t->pre_minicpm5 = pre && strcmp(pre, "minicpm5") == 0;
+    }
 
     t->im_start_id   = katali_gguf_tokenizer_find(t, "<|im_start|>", strlen("<|im_start|>"));
     t->im_end_id     = katali_gguf_tokenizer_find(t, "<|im_end|>", strlen("<|im_end|>"));
@@ -367,7 +371,7 @@ static int match_contraction(const char *s, size_t i, size_t n) {
 }
 
 /* Return the byte length of the next pretokenization span. */
-static size_t pretok_span(const char *s, size_t i, size_t n) {
+static size_t pretok_span(const KataliGgufTokenizer *t, const char *s, size_t i, size_t n) {
     int cp, w;
     if (!cp_at(s, i, n, &cp, &w)) return 1;
 
@@ -409,6 +413,23 @@ static size_t pretok_span(const char *s, size_t i, size_t n) {
         return j - i;
     }
     if (cp_is_space(cp)) {
+        /* MiniCPM5 uses the GPT-2-style pre-tokenizer where a leading space
+         * belongs to the following word (" is" -> "Ġis"). The generic path
+         * intentionally preserves its existing behavior for Qwen models. */
+        if (t && t->pre_minicpm5 && cp == ' ' && i + 1 < n) {
+            int c2, w2;
+            cp_at(s, i + 1, n, &c2, &w2);
+            if (cp_is_letter(c2)) {
+                size_t j = i + 1 + (size_t)w2;
+                while (j < n) {
+                    int c3, w3;
+                    cp_at(s, j, n, &c3, &w3);
+                    if (!cp_is_letter(c3)) break;
+                    j += (size_t)w3;
+                }
+                return j - i;
+            }
+        }
         size_t j = i;
         while (j < n) { int c2, w2; cp_at(s, j, n, &c2, &w2); if (!cp_is_space(c2)) break; j += (size_t)w2; }
         /* leave a single trailing space to attach to the next word */
@@ -449,7 +470,7 @@ int katali_gguf_tokenizer_encode(const KataliGgufTokenizer *t, const char *text,
     size_t i = 0;
     int span_ids[1024];
     while (i < n) {
-        size_t span = pretok_span(text, i, n);
+        size_t span = pretok_span(t, text, i, n);
         if (span == 0) span = 1;
         if (span > (size_t)n - i) span = n - i;
         /* bytes -> symbol ids */

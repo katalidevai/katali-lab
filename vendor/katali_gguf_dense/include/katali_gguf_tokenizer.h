@@ -37,6 +37,7 @@ typedef struct KataliGgufTokenizer {
     int    im_start_id, im_end_id, endoftext_id;
     int    think_open_id, think_close_id;
     int    add_bos;
+    int    pre_minicpm5;
 
     const char *chat_template;  /* borrowed */
     size_t chat_template_len;

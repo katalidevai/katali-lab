@@ -17,7 +17,8 @@ typedef struct KataliGgufLayer {
     const KataliGgufTensor *attn_norm;
     const KataliGgufTensor *ffn_norm;
     const KataliGgufTensor *wq, *wk, *wv, *wo;
-    const KataliGgufTensor *bq, *bk, *bv;
+    const KataliGgufTensor *bq, *bk, *bv, *bo, *rope_freqs;
+    const KataliGgufTensor *bgate, *bup, *bdown;
     const KataliGgufTensor *q_norm, *k_norm;
     const KataliGgufTensor *gate, *up, *down;
 } KataliGgufLayer;
@@ -64,6 +65,9 @@ typedef struct KataliGgufModel {
     int  q_dim, kv_dim;
     int  rope_dim;
     float rope_theta;
+    float embedding_scale;
+    float residual_scale;
+    float logit_scale;
     float rms_eps;
     int  has_bias;
     int  has_qk_norm;

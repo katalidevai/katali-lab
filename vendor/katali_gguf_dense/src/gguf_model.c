@@ -117,8 +117,8 @@ int katali_gguf_model_open(KataliGgufModel *m, const KataliBackendOptions *opts,
                               "supports dense Qwen2/Qwen3 only", m->arch);
         goto fail;
     }
-    if (strncmp(m->arch, "qwen", 4) != 0) {
-        set_err(err, err_cap, "architecture '%s' is not a supported dense Qwen model",
+    if (strncmp(m->arch, "qwen", 4) != 0 && strcmp(m->arch, "llama") != 0) {
+        set_err(err, err_cap, "architecture '%s' is not a supported dense Qwen/Llama model",
                 m->arch);
         goto fail;
     }
@@ -136,6 +136,15 @@ int katali_gguf_model_open(KataliGgufModel *m, const KataliBackendOptions *opts,
     m->rms_eps = (float)arch_f(f, m->arch, "attention.layer_norm_rms_epsilon", 1e-5);
     m->ctx_len = (int)arch_i(f, m->arch, "context_length", 4096);
     m->vocab = (int)arch_i(f, m->arch, "vocab_size", 0);
+    m->embedding_scale = 1.0f;
+    m->residual_scale = 1.0f;
+    m->logit_scale = 1.0f;
+    if (strcmp(m->arch, "llama") == 0 && m->hidden == 2048 &&
+        m->n_layers == 42 && m->vocab == 130560) {
+        m->embedding_scale = 12.0f;
+        m->residual_scale = 1.4f / sqrtf((float)m->n_layers);
+        m->logit_scale = 256.0f / (float)m->hidden;
+    }
 
     if (m->n_layers <= 0 || m->n_layers > KATALI_GGUF_MAX_LAYERS ||
         m->hidden <= 0 || m->n_heads <= 0 || m->head_dim <= 0 ||
@@ -189,6 +198,11 @@ int katali_gguf_model_open(KataliGgufModel *m, const KataliBackendOptions *opts,
         lw->bq = T(f, "blk.%d.attn_q.bias", L);
         lw->bk = T(f, "blk.%d.attn_k.bias", L);
         lw->bv = T(f, "blk.%d.attn_v.bias", L);
+        lw->bo = T(f, "blk.%d.attn_output.bias", L);
+        lw->rope_freqs = T(f, "blk.%d.rope_freqs.weight", L);
+        lw->bgate = T(f, "blk.%d.ffn_gate.bias", L);
+        lw->bup = T(f, "blk.%d.ffn_up.bias", L);
+        lw->bdown = T(f, "blk.%d.ffn_down.bias", L);
         lw->q_norm = T(f, "blk.%d.attn_q_norm.weight", L);
         lw->k_norm = T(f, "blk.%d.attn_k_norm.weight", L);
         char nm[128];
@@ -551,6 +565,8 @@ static int matmul_t(KataliGgufModel *m, const KataliGgufTensor *t,
     return 0;
 }
 
+static void rope_prepare_layer(KataliGgufModel *m, const KataliGgufTensor *t, int pos);
+
 static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
     if (token_id < 0 || token_id >= m->vocab) return -1;
     size_t row_bytes = katali_ggml_row_bytes(m->embed->type, (uint64_t)m->hidden);
@@ -562,6 +578,8 @@ static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
     double t_embed = prof0();
     if (katali_ggml_dequant_ref(m->embed->type, row, (uint64_t)m->hidden, m->x) != 0)
         return -1;
+    if (m->embedding_scale != 1.0f)
+        for (int i = 0; i < m->hidden; i++) m->x[i] *= m->embedding_scale;
     prof1(KATALI_PHASE_EMBED, t_embed);
 
     const int H = m->hidden, NH = m->n_heads, NKV = m->n_kv_heads, HD = m->head_dim;
@@ -578,6 +596,7 @@ static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
     for (int L = 0; L < m->n_layers; L++) {
         if (m->cancel) return -1;
         KataliGgufLayer *lw = &m->layers[L];
+        rope_prepare_layer(m, lw->rope_freqs, pos);
 
         const float *nw = load_norm(m, lw->attn_norm, H);
         if (!nw) return -1;
@@ -643,7 +662,9 @@ static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
                                         (volatile int *)&m->cancel);
         prof1(KATALI_PHASE_ATTENTION, t_attn);
         if (matvec_t(m, lw->wo, m->attn, m->down, KATALI_ROLE_WO) != 0) return -1;
-        katali_gguf_add_inplace(m->x, m->down, (size_t)H);
+        add_bias(m, m->down, lw->bo, H);
+        if (m->residual_scale == 1.0f) katali_gguf_add_inplace(m->x, m->down, (size_t)H);
+        else for (int i = 0; i < H; i++) m->x[i] += m->residual_scale * m->down[i];
 
         nw = load_norm(m, lw->ffn_norm, H);
         if (!nw) return -1;
@@ -657,6 +678,8 @@ static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
             float *gu_y[2] = { m->gate, m->up };
             const int gu_r[2] = { KATALI_ROLE_GATE, KATALI_ROLE_UP };
             if (matvec_multi_t(m, gu_t, gu_y, gu_r, 2, m->xb) != 0) return -1;
+            add_bias(m, m->gate, lw->bgate, m->ffn_dim);
+            add_bias(m, m->up, lw->bup, m->ffn_dim);
         }
         double t_act = prof0();
         if (katali_ggml_silu_mul_avx2(m->gate, m->up, (size_t)m->ffn_dim) != 0) {
@@ -665,13 +688,17 @@ static int gguf_forward_token(KataliGgufModel *m, int token_id, int pos) {
         }
         prof1(KATALI_PHASE_ACTIVATION, t_act);
         if (matvec_t(m, lw->down, m->gate, m->down, KATALI_ROLE_DOWN) != 0) return -1;
-        katali_gguf_add_inplace(m->x, m->down, (size_t)H);
+        add_bias(m, m->down, lw->bdown, H);
+        if (m->residual_scale == 1.0f) katali_gguf_add_inplace(m->x, m->down, (size_t)H);
+        else for (int i = 0; i < H; i++) m->x[i] += m->residual_scale * m->down[i];
     }
 
     const float *nw = load_norm(m, m->out_norm, H);
     if (!nw) return -1;
     katali_gguf_rmsnorm(m->x, nw, (size_t)H, m->rms_eps, m->xb);
     if (matvec_t(m, m->out_w, m->xb, m->logits, KATALI_ROLE_LM_HEAD) != 0) return -1;
+    if (m->logit_scale != 1.0f)
+        for (int i = 0; i < m->vocab; i++) m->logits[i] *= m->logit_scale;
     return 0;
 }
 
@@ -701,6 +728,8 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
         const uint8_t *row = m->embed->data + (size_t)id * row_bytes;
         if (katali_ggml_dequant_ref(m->embed->type, row, (uint64_t)H,
                                     X + (size_t)t * H) != 0) return -1;
+        if (m->embedding_scale != 1.0f)
+            for (int i = 0; i < H; i++) X[(size_t)t * H + i] *= m->embedding_scale;
     }
 
     for (int L = 0; L < m->n_layers; L++) {
@@ -741,7 +770,7 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
                     katali_gguf_rmsnorm_inplace(kt + (size_t)h * HD, kn,
                                                 (size_t)HD, m->rms_eps);
             }
-            rope_prepare(m, pos);
+            rope_prepare_layer(m, lw->rope_freqs, pos);
             katali_gguf_rope_apply(qt, (size_t)NH, (size_t)HD, (size_t)m->rope_dim,
                                    m->rope_cos, m->rope_sin);
             katali_gguf_rope_apply(kt, (size_t)NKV, (size_t)HD, (size_t)m->rope_dim,
@@ -768,7 +797,10 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
 
         if (matmul_t(m, lw->wo, ATT, (uint64_t)B, O, KATALI_ROLE_WO) != 0) return -1;
         for (int t = 0; t < B; t++)
-            katali_gguf_add_inplace(X + (size_t)t * H, O + (size_t)t * H, (size_t)H);
+            add_bias(m, O + (size_t)t * H, lw->bo, H);
+        for (int t = 0; t < B; t++)
+            if (m->residual_scale == 1.0f) katali_gguf_add_inplace(X + (size_t)t * H, O + (size_t)t * H, (size_t)H);
+            else for (int i = 0; i < H; i++) X[(size_t)t * H + i] += m->residual_scale * O[(size_t)t * H + i];
 
         nw = load_norm(m, lw->ffn_norm, H);
         if (!nw) return -1;
@@ -779,6 +811,10 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
         if (matmul_t(m, lw->gate, XB, (uint64_t)B, G, KATALI_ROLE_GATE) != 0) return -1;
         if (matmul_t(m, lw->up, XB, (uint64_t)B, U, KATALI_ROLE_UP) != 0) return -1;
         for (int t = 0; t < B; t++) {
+            add_bias(m, G + (size_t)t * FFN, lw->bgate, FFN);
+            add_bias(m, U + (size_t)t * FFN, lw->bup, FFN);
+        }
+        for (int t = 0; t < B; t++) {
             float *g = G + (size_t)t * FFN;
             const float *u = U + (size_t)t * FFN;
             if (katali_ggml_silu_mul_avx2(g, u, (size_t)FFN) != 0) {
@@ -787,7 +823,10 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
         }
         if (matmul_t(m, lw->down, G, (uint64_t)B, O, KATALI_ROLE_DOWN) != 0) return -1;
         for (int t = 0; t < B; t++)
-            katali_gguf_add_inplace(X + (size_t)t * H, O + (size_t)t * H, (size_t)H);
+            add_bias(m, O + (size_t)t * H, lw->bdown, H);
+        for (int t = 0; t < B; t++)
+            if (m->residual_scale == 1.0f) katali_gguf_add_inplace(X + (size_t)t * H, O + (size_t)t * H, (size_t)H);
+            else for (int i = 0; i < H; i++) X[(size_t)t * H + i] += m->residual_scale * O[(size_t)t * H + i];
     }
 
     /* Only the last prompt token needs logits. */
@@ -796,6 +835,8 @@ static int gguf_prefill_chunk(KataliGgufModel *m, const int *ids, int n0, int B,
     katali_gguf_rmsnorm(X + (size_t)(B - 1) * H, nw, (size_t)H, m->rms_eps,
                         XB + (size_t)(B - 1) * H);
     if (matvec_t(m, m->out_w, XB + (size_t)(B - 1) * H, m->logits, KATALI_ROLE_LM_HEAD) != 0) return -1;
+    if (m->logit_scale != 1.0f)
+        for (int i = 0; i < m->vocab; i++) m->logits[i] *= m->logit_scale;
     return 0;
 }
 
@@ -870,6 +911,25 @@ static int template_has(const KataliGgufTokenizer *tk, const char *needle) {
     return 0;
 }
 
+static void rope_prepare_layer(KataliGgufModel *m, const KataliGgufTensor *t, int pos) {
+    if (!t || !t->data) { rope_prepare(m, pos); return; }
+    size_t rd = (m->rope_dim == 0 || m->rope_dim > m->head_dim) ? (size_t)m->head_dim : (size_t)m->rope_dim;
+    size_t half = rd / 2;
+    if (katali_ggml_dequant_ref(t->type, t->data, (uint64_t)half, m->nw) != 0) {
+        rope_prepare(m, pos); return;
+    }
+    for (size_t i = 0; i < half; i++) {
+        float freq = (float)pos * m->nw[i];
+        m->rope_cos[i] = cosf(freq);
+        m->rope_sin[i] = sinf(freq);
+    }
+}
+
+static int is_minicpm5_model(const KataliGgufModel *m) {
+    return m && strcmp(m->arch, "llama") == 0 &&
+           m->hidden == 2048 && m->n_layers == 42 && m->vocab == 130560;
+}
+
 int katali_gguf_model_format_chat(KataliGgufModel *m, const char *user_text,
                                   int think, int fallback_raw,
                                   int *ids, int max_ids) {
@@ -879,19 +939,24 @@ int katali_gguf_model_format_chat(KataliGgufModel *m, const char *user_text,
      * a hard-coded id. */
     if (tk->im_start_id >= 0 && tk->im_end_id >= 0) {
         int at = 0;
+        const int minicpm5 = is_minicpm5_model(m);
+        if (minicpm5 && tk->bos_id >= 0) {
+            at = append_id(ids, at, max_ids, tk->bos_id);
+            if (at < 0) return -1;
+        }
         at = append_id(ids, at, max_ids, tk->im_start_id);
         if (at < 0) return -1;
-        at = append_text(tk, "user\n", ids, at, max_ids);
+        at = append_text(tk, minicpm5 ? "user\r\n" : "user\n", ids, at, max_ids);
         if (at < 0) return -1;
         at = append_text(tk, user_text, ids, at, max_ids);
         if (at < 0) return -1;
         at = append_id(ids, at, max_ids, tk->im_end_id);
         if (at < 0) return -1;
-        at = append_text(tk, "\n", ids, at, max_ids);
+        at = append_text(tk, minicpm5 ? "\r\n" : "\n", ids, at, max_ids);
         if (at < 0) return -1;
         at = append_id(ids, at, max_ids, tk->im_start_id);
         if (at < 0) return -1;
-        at = append_text(tk, "assistant\n", ids, at, max_ids);
+        at = append_text(tk, minicpm5 ? "assistant\r\n" : "assistant\n", ids, at, max_ids);
         if (at < 0) return -1;
         /* Qwen3's template emits an empty think block to disable thinking; the
          * behaviour is only applied when the file's template actually declares
@@ -900,11 +965,11 @@ int katali_gguf_model_format_chat(KataliGgufModel *m, const char *user_text,
             if (tk->think_open_id >= 0 && tk->think_close_id >= 0) {
                 at = append_id(ids, at, max_ids, tk->think_open_id);
                 if (at < 0) return -1;
-                at = append_text(tk, "\n\n", ids, at, max_ids);
+                at = append_text(tk, minicpm5 ? "\r\n\r\n" : "\n\n", ids, at, max_ids);
                 if (at < 0) return -1;
                 at = append_id(ids, at, max_ids, tk->think_close_id);
                 if (at < 0) return -1;
-                at = append_text(tk, "\n\n", ids, at, max_ids);
+                at = append_text(tk, minicpm5 ? "\r\n\r\n" : "\n\n", ids, at, max_ids);
                 if (at < 0) return -1;
             } else {
                 at = append_text(tk, "\n\n", ids, at, max_ids);
@@ -929,6 +994,11 @@ int katali_gguf_model_generate(KataliGgufModel *m, const char *prompt,
     int ids[8192];
     double tt = now_s();
     int n = katali_gguf_model_format_chat(m, prompt, m->think, 1, ids, 8192);
+    if (getenv("KATALI_DEBUG")) {
+        fprintf(stderr, "dense_prompt_tokens=%d:", n);
+        for (int i = 0; i < n; i++) fprintf(stderr, " %d", ids[i]);
+        fputc('\n', stderr);
+    }
     m->last.tokenize_s = now_s() - tt;
     m->stats.tokenize_s += m->last.tokenize_s;
     katali_prof_add_n(KATALI_PHASE_TOKENIZE, m->last.tokenize_s, 1);
@@ -987,6 +1057,7 @@ int katali_gguf_model_generate(KataliGgufModel *m, const char *prompt,
         int next;
         double t_samp = prof0();
         next = katali_gguf_sample(&m->sampler, m->logits, m->vocab, recent, nrec);
+        if (getenv("KATALI_DEBUG")) fprintf(stderr, "dense_next[%d]=%d\n", gen, next);
         prof1(KATALI_PHASE_SAMPLER, t_samp);
         if (next < 0) break;
         if (next == eos1 || next == eos2 || next == eos3) break;
