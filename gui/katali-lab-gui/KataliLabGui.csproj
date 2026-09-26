@@ -8,11 +8,11 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>katali-lab-gui</AssemblyName>
     <RootNamespace>KataliLabGui</RootNamespace>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <Product>Katali Lab Chat</Product>
     <AssemblyTitle>Katali Lab Chat</AssemblyTitle>
     <Description>Dark-theme chat GUI for katali-lab</Description>
-    <Version>1.1.0</Version>
+    <Version>1.4.2</Version>
   </PropertyGroup>
 
 </Project>

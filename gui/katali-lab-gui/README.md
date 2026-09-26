@@ -1,58 +1,83 @@
-# Katali Lab Chat
+﻿# Katali Lab Chat
 
-Professional dark-theme WPF chat GUI for `katali-lab.exe`.
+Dark-theme Windows chat app for `katali-lab` — local GGUF inference with multi-turn ChatML.
+
+Model weights are **not** included. Download GGUFs yourself (Hugging Face or another source), then point the app at them.
 
 ## Requirements
 
 - Windows x64
-- .NET 9 SDK (`net9.0-windows`)
+- [.NET 9](https://dotnet.microsoft.com/download/dotnet/9.0) runtime (framework-dependent build)
+- `katali-lab.exe` next to this GUI (or discoverable in a parent folder)
+- At least one GGUF model (file or multi-shard folder)
 
-## Build (framework-dependent single-file)
+## Recommended model
 
-From this folder on Windows:
+**Qwen3.6-35B-A3B** (Q4_K_M) is the recommended laptop chat model. Example filename after download:
+
+```
+Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf
+```
+
+You can keep models anywhere. The app also scans `C:\models` when that folder exists. On first launch — or when the last-used model is missing — it **prefers a 35B model if one is already present**. It never requires a preinstalled path.
+
+Product generation defaults (independent of whether a 35B file is on disk):
+
+| Setting | Default | Notes |
+|--------|---------|--------|
+| Max tokens | 512 | Comfortable chat length at ~2 tok/s |
+| Expert cache | 8 GiB | Measured 35B laptop profile |
+| Pinned cache | 25% | Same profile |
+| Thinking | Off | Faster replies |
+| Memory-map cache | On | Recommended |
+| GPU MoE | Off | CPU is typically faster for short 35B runs |
+
+Selecting a 35B model only fills **empty** cache/pin fields — saved settings are never overwritten.
+
+## Get a model
+
+1. Download a Qwen3.6-35B-A3B Q4_K_M GGUF (or another supported model).
+2. In the app, click **Browse…** (single file) or **Folder…** (multi-shard).
+3. Or place `.gguf` files under `C:\models` and click **Refresh models**.
+
+## Build
 
 ```bat
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
 ```
 
-Or run:
+Or run `build-gui.bat` from this folder. Output is copied next to `katali-lab.exe` (lab root).
 
-```bat
-build-gui.bat
+## Run
+
+1. Place `katali-lab-gui.exe` beside `katali-lab.exe`.
+2. Add a model (see above).
+3. Open the GUI, pick the model, type a message, **Send** (Enter). Shift+Enter for a newline.
+
+## Features
+
+- **Multi-turn chat** — history embedded as Qwen ChatML each turn
+- **Sessions** — sidebar chats under `%AppData%\KataliLab\chats\`
+- **Context meter** — approximate prompt tokens (`chars ÷ 4`) vs an 8k soft budget; warns above ~6k
+- **Markdown** — assistant replies render bold, italic, code, lists, and links after generation (plain text while streaming)
+- **Message actions** — right-click **Copy** / **Retry** / **Edit last user**
+- **Settings** — generation, thinking, system prompt, cache, GPU MoE
+
+## Settings file
+
+`%AppData%\KataliLab\gui-settings.json`
+
+## Tips for 35B (~2 tok/s)
+
+- Keep chats short; start a **New chat** when the context meter turns red.
+- Leave **thinking** and **GPU MoE** off unless you need them.
+- Prefer **Stop** over closing the window during a run.
+
+## Layout
+
 ```
-
-That writes `katali-lab-gui.exe` into the lab root (`..\` when this folder is `gui\`) or into `publish\` as fallback.
-
-## Deploy / run
-
-1. Place `katali-lab-gui.exe` next to `katali-lab.exe` (lab root), **or** keep it under `gui\` — the GUI searches upward for `katali-lab.exe`.
-2. Models live under `C:\models`:
-   - Any `*.gguf` file → selectable entry
-   - Any directory containing `*.gguf` (including one nested level) → entry pointing at that directory (multi-shard)
-3. Double-click `katali-lab-gui.exe`, pick a model, type a prompt, Send.
-
-## Behavior
-
-- **Send** runs: `katali-lab.exe generate <modelPath> <prompt> --max <N>`
-- Streams stdout into the assistant bubble (UTF-8)
-- Parses stderr lines starting with `speed:` into the status bar (SpeedText)
-- Status phases: `idle` → `loading model…` → (`prefill…` if reported) → `generating…` → `done` (or `stopping…` / `stopped`)
-- **Stop** immediately disables itself, kills the process tree (`taskkill /T /F`), clears streaming state, re-enables Send
-- **Clear chat** removes all bubbles (disabled while generating); model / max-tokens unchanged
-- **Refresh models** rescans `C:\models`
-- **Last model** remembered in `%AppData%\KataliLab\gui-settings.json`
-- **Screenshot**: `katali-lab-gui.exe --screenshot C:\path\to\out.png` (RenderTargetBitmap PNG, then exit)
-
-## Suggested layout on disk
-
-```
-C:\Users\joanr\Desktop\katali-lab\
+katali-lab\
   katali-lab.exe
   katali-lab-gui.exe
-  gui\
-    katali-lab-gui\     ← this source tree
-      KataliLabGui.csproj
-      ...
+  gui\katali-lab-gui\   ← this source tree
 ```
-
-See `POLISH_NOTES.md` for polish #2 details.
